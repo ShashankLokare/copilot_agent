@@ -31,6 +31,8 @@ class Backtester:
         initial_capital: float = 100000.0,
         slippage_bps: float = 2.0,
         spread_bps: float = 1.0,
+        signal_processor: Optional[SignalProcessor] = None,
+        alphas: Optional[List] = None,
     ):
         """
         Initialize backtester.
@@ -40,6 +42,7 @@ class Backtester:
             initial_capital: Starting capital
             slippage_bps: Slippage in basis points
             spread_bps: Bid-ask spread in basis points
+            signal_processor: Optional custom signal processor (for gating/tuning)
         """
         self.data_adapter = data_adapter
         self.initial_capital = initial_capital
@@ -50,13 +53,13 @@ class Backtester:
         self.feature_engine = FeatureEngineering()
         self.regime_manager = RegimeManager(SimpleRulesRegimeDetector())
         
-        self.alpha_engine = AlphaEngine([
+        self.alpha_engine = AlphaEngine(alphas if alphas is not None else [
             MomentumAlpha(),
             MeanReversionAlpha(),
             BreakoutAlpha(),
         ])
         
-        self.signal_processor = SignalProcessor()
+        self.signal_processor = signal_processor or SignalProcessor()
         self.risk_engine = RiskEngine()
         self.portfolio_builder = PortfolioBuilder()
         

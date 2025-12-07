@@ -14,6 +14,8 @@ from data.adapters import CSVAdapter
 from backtest.backtester import Backtester
 from utils.market_selector import get_market_config_path, Market
 from datetime import datetime
+from alpha.alpha_models import MLAlphaXGBoost
+from signals.signal_processor import SignalProcessor, SignalFilter, SignalValidator
 
 
 def main():
@@ -39,12 +41,28 @@ def main():
         print("Please configure data.csv_path in config file")
         sys.exit(1)
     
+    # High-conviction ML alpha (gated)
+    ml_alpha = MLAlphaXGBoost(
+        model_id="nifty50_xgboost_adv_20251207_155931",
+        prob_long=0.53,
+        prob_short=0.20,
+        min_expected_edge=0.0005,
+        allow_regime_buckets=None,  # allow all regimes for now; refine once logged
+        allow_shorts=False,
+    )
+    signal_processor = SignalProcessor(
+        validator=SignalValidator(min_signal_strength=0.5, require_confirmation=False),
+        filter=SignalFilter(min_confidence=0.5, min_edge=0.005),
+    )
+
     # Initialize backtester
     backtester = Backtester(
         data_adapter=data_adapter,
         initial_capital=100000.0,
         slippage_bps=config.execution.slippage_bps,
         spread_bps=config.execution.spread_bps,
+        signal_processor=signal_processor,
+        alphas=[ml_alpha],
     )
     
     # Run backtest
