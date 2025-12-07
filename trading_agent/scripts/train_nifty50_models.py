@@ -115,6 +115,15 @@ def _load_existing_dataset(path: Path) -> pd.DataFrame:
     return df
 
 
+def _get_current_nifty50() -> List[str]:
+    """Return current NIFTY50 symbol list (kept in collect script)."""
+    try:
+        from scripts.collect_nifty50_15y_data import NIFTY50_SYMBOLS
+        return list(NIFTY50_SYMBOLS)
+    except Exception:
+        return []
+
+
 def _build_trades_df(
     closes: np.ndarray,
     timestamps: np.ndarray,
@@ -152,6 +161,7 @@ def run_complete_training_pipeline(
     n_monte_carlo: int = 500,
     use_existing_data: bool = True,
     raw_data_path: str = "data/nifty50_15y_ohlcv.csv",
+    use_current_nifty50: bool = False,
 ) -> Dict:
     """
     Run end-to-end training, calibration, realistic backtest, and Monte Carlo.
@@ -211,6 +221,16 @@ def run_complete_training_pipeline(
             logger.error(f"✗ Data collection failed: {e}")
             results["stages"]["data_collection"] = {"status": "failed", "error": str(e)}
             return results
+    # Optional symbol filter
+    if use_current_nifty50:
+        allow = set(_get_current_nifty50())
+        before = df_raw["symbol"].nunique()
+        df_raw = df_raw[df_raw["symbol"].isin(allow)].copy()
+        after = df_raw["symbol"].nunique()
+        results["stages"]["data_collection"]["symbols_filtered"] = f"{before} -> {after}"
+        logger.info(f"Filtered symbols to current NIFTY50: {after} kept (from {before})")
+        # Persist filtered version for downstream prep
+        df_raw.to_csv(data_path, index=False)
 
     # Stage 2: Prepare Data
     logger.info("\n[STAGE 2] PREPARING DATA (FEATURES + LABELS)")
@@ -490,6 +510,11 @@ def main():
         default="data/nifty50_15y_ohlcv.csv",
         help="Path to raw OHLCV CSV to use directly (skips collection if present)",
     )
+    parser.add_argument(
+        "--use-current-nifty50",
+        action="store_true",
+        help="Filter dataset to current NIFTY50 constituents",
+    )
 
     args = parser.parse_args()
 
@@ -505,6 +530,7 @@ def main():
         n_monte_carlo=args.n_mc,
         use_existing_data=args.use_existing_data,
         raw_data_path=args.raw_data_path,
+        use_current_nifty50=args.use_current_nifty50,
     )
 
     if results.get("status") == "completed":
