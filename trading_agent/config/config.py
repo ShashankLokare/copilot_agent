@@ -67,6 +67,7 @@ class RiskConfig:
     atr_stop_multiple: float = 2.0  # Stop loss at entry +/- N*ATR
     kill_switch_enabled: bool = True
     kill_switch_drawdown_pct: float = 20.0
+    starting_cash: float = 100000.0
 
 
 @dataclass

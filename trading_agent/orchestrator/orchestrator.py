@@ -5,11 +5,9 @@ Coordinates all components and executes the full trading pipeline.
 
 from typing import List, Optional, Dict
 from datetime import datetime
-from enum import Enum
 import time
 
 from config.config import Config
-from utils.types import OperationMode
 from data.adapters import DataAdapter, MarketDataProvider
 from features.feature_engineering import FeatureEngineering
 from regime.regime_detector import RegimeManager, SimpleRulesRegimeDetector, MLRegimeDetector
@@ -19,7 +17,7 @@ from risk.risk_engine import RiskEngine
 from portfolio.portfolio_engine import PortfolioBuilder, PortfolioRebalancer
 from execution.execution_engine import ExecutionEngine, SimulatedExecutor
 from monitoring.metrics import PerformanceTracker, Logger
-from utils.types import PortfolioState, Position, OperationMode as OM
+from utils.types import PortfolioState, Position, SignalDirection
 
 
 class Orchestrator:
@@ -231,48 +229,10 @@ class Orchestrator:
             
             # Step 5: Apply risk management
             self.logger.log_info("Step 5: Applying risk management...")
-            
-            if self.portfolio_state is None:
-                self.portfolio_state = PortfolioState(
-                    timestamp=timestamp,
-                    cash=self.config.data.symbols,  # Would be actual cash in production
-                    equity=0.0,
-                    total_value=100000.0,  # Would be actual portfolio value
-                    positions=self.positions,
-                )
-            
-            approved_orders = []
-            
-            for signal in scored_signals:
-                if signal.symbol not in market_states:
-                    continue
-                
-                current_price = market_states[signal.symbol].current_price
-                atr = feature_data[signal.symbol].atr if signal.symbol in feature_data else current_price * 0.02
-                
-                assessment = self.risk_engine.assess_trade(
-                    signal,
-                    current_price,
-                    atr,
-                    self.portfolio_state,
-                    list(self.positions.values())
-                )
-                
-                if assessment.action.value == "ACCEPT":
-                    self.logger.log_info(f"Trade approved: {signal.symbol} {assessment.reasoning}")
-                    
-                    # Create order
-                    from utils.types import Order, OrderType
-                    order = Order(
-                        symbol=signal.symbol,
-                        quantity=assessment.approved_quantity,
-                        order_type=OrderType.MARKET,
-                        direction=signal.direction,
-                        timestamp=timestamp,
-                    )
-                    approved_orders.append(order)
-                else:
-                    self.logger.log_info(f"Trade rejected: {signal.symbol} {assessment.reasoning}")
+
+            approved_orders = self._build_orders_from_signals(
+                scored_signals, feature_data, market_states, timestamp
+            )
             
             # Step 6: Portfolio construction (optional rebalancing)
             self.logger.log_info("Step 6: Constructing portfolio...")
@@ -281,7 +241,11 @@ class Orchestrator:
                 # Execute orders
                 order_ids = self.execution_engine.execute_orders(approved_orders)
                 self.logger.log_info(f"Executed {len(order_ids)} orders")
-            
+
+                filled_orders = self.execution_engine.get_filled_orders()
+                if filled_orders:
+                    self._update_portfolio_with_fills(filled_orders, market_states, timestamp)
+
             # Step 7: Record metrics
             self.logger.log_info("Step 7: Recording metrics...")
             self.tracker.record_equity(timestamp, self.portfolio_state.total_value)
@@ -292,6 +256,144 @@ class Orchestrator:
             self.logger.log_error(f"Error in iteration: {e}")
             import traceback
             traceback.print_exc()
+            self.stop()
+
+    def _build_orders_from_signals(self, scored_signals, feature_data, market_states, timestamp):
+        """Apply risk checks and translate scored signals into executable orders."""
+        if self.portfolio_state is None:
+            starting_cash = self.config.risk.starting_cash
+            self.portfolio_state = PortfolioState(
+                timestamp=timestamp,
+                cash=starting_cash,
+                equity=starting_cash,
+                total_value=starting_cash,
+                positions=self.positions,
+            )
+
+        approved_orders = []
+
+        for signal in scored_signals:
+            if signal.symbol not in market_states:
+                continue
+
+            current_price = market_states[signal.symbol].current_price
+            atr = feature_data[signal.symbol].atr if signal.symbol in feature_data else 0.0
+
+            if atr <= 0:
+                volatility = getattr(market_states[signal.symbol], "volatility", 0.0)
+                volatility = volatility or 0.0
+                atr = (volatility * current_price) / (252 ** 0.5) if volatility > 0 else 0.0
+
+            if atr <= 0:
+                self.logger.log_warning(
+                    f"Skipping {signal.symbol}: unable to compute ATR/volatility for sizing"
+                )
+                continue
+
+            assessment = self.risk_engine.assess_trade(
+                signal,
+                current_price,
+                atr,
+                self.portfolio_state,
+                list(self.positions.values())
+            )
+
+            if assessment.action.value == "ACCEPT":
+                self.logger.log_info(f"Trade approved: {signal.symbol} {assessment.reasoning}")
+
+                from utils.types import Order, OrderType
+                order = Order(
+                    symbol=signal.symbol,
+                    quantity=assessment.approved_quantity,
+                    order_type=OrderType.MARKET,
+                    direction=signal.direction,
+                    limit_price=current_price,
+                    timestamp=timestamp,
+                )
+                approved_orders.append(order)
+            else:
+                self.logger.log_info(f"Trade rejected: {signal.symbol} {assessment.reasoning}")
+
+        return approved_orders
+
+    def _update_portfolio_with_fills(self, filled_orders, market_states, timestamp):
+        """Update cash, positions, and portfolio value based on filled orders."""
+        for order in filled_orders:
+            fill_value = order.avg_fill_price * order.filled_quantity
+            quantity = order.filled_quantity if order.direction == SignalDirection.LONG else -order.filled_quantity
+
+            if order.direction == SignalDirection.LONG:
+                self.portfolio_state.cash -= fill_value
+            else:
+                self.portfolio_state.cash += fill_value
+
+            existing_position = self.positions.get(order.symbol)
+            market_state = market_states.get(order.symbol)
+            market_price = market_state.current_price if market_state else order.avg_fill_price
+
+            if existing_position:
+                existing_qty = existing_position.quantity
+                new_quantity = existing_qty + quantity
+
+                if new_quantity == 0:
+                    del self.positions[order.symbol]
+                    continue
+
+                same_direction = existing_qty * quantity > 0
+                flips_direction = existing_qty * new_quantity < 0
+
+                if same_direction:
+                    weighted_entry = (
+                        abs(existing_qty) * existing_position.entry_price +
+                        abs(quantity) * order.avg_fill_price
+                    ) / abs(new_quantity)
+                    self.positions[order.symbol] = Position(
+                        symbol=order.symbol,
+                        quantity=new_quantity,
+                        entry_price=weighted_entry,
+                        current_price=market_price,
+                        timestamp=timestamp,
+                    )
+                else:
+                    if flips_direction:
+                        self.positions[order.symbol] = Position(
+                            symbol=order.symbol,
+                            quantity=new_quantity,
+                            entry_price=order.avg_fill_price,
+                            current_price=market_price,
+                            timestamp=timestamp,
+                        )
+                    else:
+                        self.positions[order.symbol] = Position(
+                            symbol=order.symbol,
+                            quantity=new_quantity,
+                            entry_price=existing_position.entry_price,
+                            current_price=market_price,
+                            timestamp=timestamp,
+                        )
+            else:
+                self.positions[order.symbol] = Position(
+                    symbol=order.symbol,
+                    quantity=quantity,
+                    entry_price=order.avg_fill_price,
+                    current_price=market_price,
+                    timestamp=timestamp,
+                )
+
+        self._recalculate_portfolio_values(market_states)
+
+    def _recalculate_portfolio_values(self, market_states):
+        """Recompute equity and total value from current positions and cash."""
+        equity_value = self.portfolio_state.cash
+        for symbol, position in self.positions.items():
+            market_state = market_states.get(symbol)
+            market_price = market_state.current_price if market_state else position.current_price
+            position.current_price = market_price
+            position._update_pnl()
+            equity_value += position.quantity * market_price
+
+        self.portfolio_state.equity = equity_value
+        self.portfolio_state.total_value = equity_value
     
     def run_continuous(
         self,

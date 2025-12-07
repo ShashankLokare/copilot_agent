@@ -4,7 +4,7 @@ This is a template - expand these tests as needed.
 """
 
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 # Test imports
@@ -73,14 +73,14 @@ class TestFeatureEngineering(unittest.TestCase):
         """Create sample bars."""
         self.fe = FeatureEngineering()
         self.bars = []
-        
+
         # Generate 50 bars of data
         base_price = 100.0
         for i in range(50):
             price_change = 1.0 + (i * 0.01)  # Slight uptrend
             self.bars.append(Bar(
                 symbol="TEST",
-                timestamp=datetime(2024, 1, i+1, tzinfo=pytz.UTC),
+                timestamp=datetime(2024, 1, 1, tzinfo=pytz.UTC) + timedelta(days=i),
                 open=base_price,
                 high=base_price * 1.01,
                 low=base_price * 0.99,
@@ -172,12 +172,13 @@ class TestAlphaModels(unittest.TestCase):
             price=100.0,
             sma_20=98.0,
             sma_50=99.0,
-            rsi=70.0,  # Overbought
+            rsi=95.0,  # Overbought
             macd=0.5,
             atr=2.0,
             bollinger_upper=105.0,
             bollinger_lower=95.0
         )
+        self.features.bollinger_width = self.features.bollinger_upper - self.features.bollinger_lower
         
         self.regime = RegimeState(
             regime=Regime.TREND_HIGH_VOL,

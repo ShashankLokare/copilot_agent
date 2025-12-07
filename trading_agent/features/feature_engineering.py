@@ -106,6 +106,14 @@ class FeatureEngineering:
                 "sma_20", "sma_50", "sma_200",
                 "rsi", "macd", "atr", "bollinger"
             ]
+
+        normalized_indicators = []
+        for indicator in enabled_indicators:
+            if not isinstance(indicator, str):
+                raise ValueError("enabled_indicators must be a list of strings")
+            normalized_indicators.append(indicator.lower())
+
+        enabled_indicators = normalized_indicators
         
         features = Features(
             timestamp=df.iloc[-1]['timestamp'],
@@ -121,16 +129,16 @@ class FeatureEngineering:
         # Compute enabled indicators
         if "sma_20" in enabled_indicators:
             features.sma_20 = self._compute_sma(df['close'], self.lookbacks["sma_short"])
-        
+
         if "sma_50" in enabled_indicators:
             features.sma_50 = self._compute_sma(df['close'], self.lookbacks["sma_mid"])
-        
+
         if "sma_200" in enabled_indicators:
             features.sma_200 = self._compute_sma(df['close'], self.lookbacks["sma_long"])
-        
+
         if "rsi" in enabled_indicators:
             features.rsi = self._compute_rsi(df['close'], self.lookbacks["rsi_period"])
-        
+
         if "macd" in enabled_indicators:
             macd_values = self._compute_macd(
                 df['close'],
@@ -149,7 +157,7 @@ class FeatureEngineering:
                 df['close'],
                 self.lookbacks["atr_period"]
             )
-        
+
         if "bollinger" in enabled_indicators:
             bb_values = self._compute_bollinger(
                 df['close'],
@@ -158,7 +166,7 @@ class FeatureEngineering:
             features.bollinger_upper = bb_values[0]
             features.bollinger_lower = bb_values[1]
             features.bollinger_width = bb_values[2]
-        
+
         if "volume" in enabled_indicators:
             features.volume_sma = self._compute_sma(
                 df['volume'],
