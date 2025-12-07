@@ -115,7 +115,9 @@ class SimulatedExecutor(ExecutionAdapter):
     
     def get_filled_orders(self) -> List[Order]:
         """Get all filled orders."""
-        return self.filled_orders
+        filled = list(self.filled_orders)
+        self.filled_orders = []
+        return filled
     
     def _process_fill(self, order_id: str):
         """Process simulated order fill."""
