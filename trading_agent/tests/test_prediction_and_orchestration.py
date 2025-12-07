@@ -17,7 +17,8 @@ from signals.signal_processor import (
     SignalValidator,
     StrategyPerformance,
 )
-from utils.types import Bar, MarketState, Signal, SignalDirection
+from utils.types import Bar, MarketState, Signal, SignalDirection, ScoredSignal
+from risk.risk_engine import RiskAssessment, RiskAction
 
 
 def generate_trending_bars(symbol: str = "TEST", start_price: float = 100.0, count: int = 60):
@@ -93,6 +94,20 @@ class TestPredictionLogic(unittest.TestCase):
         self.assertGreater(features.bollinger_width, 0.0)
         self.assertGreaterEqual(features.rsi, 0.0)
         self.assertLessEqual(features.rsi, 100.0)
+
+    def test_indicator_unknowns_and_types(self):
+        fe = FeatureEngineering()
+        features = fe.compute_features(
+            self.bars,
+            enabled_indicators=["Sma_20", "rSi", "UNKNOWN"],
+        )
+
+        self.assertGreater(features.sma_20, 0.0)
+        self.assertGreaterEqual(features.rsi, 0.0)
+        self.assertEqual(features.atr, 0.0)
+
+        with self.assertRaises(ValueError):
+            fe.compute_features(self.bars, enabled_indicators=["SMA_20", 10])
 
     def test_alpha_models_directional_bias(self):
         features = Features(
@@ -174,6 +189,95 @@ class TestTradingOrchestrator(unittest.TestCase):
             orchestrator.portfolio_state.cash + position.quantity * position.current_price
         )
         self.assertAlmostEqual(orchestrator.portfolio_state.total_value, reconstructed_value, places=2)
+
+    def test_run_iteration_no_trades_when_no_models(self):
+        bars = generate_trending_bars()
+        adapter = FakeDataAdapter(bars)
+        config = Config()
+        config.data.symbols = ["TEST"]
+        config.alpha.enabled_models = []
+
+        orchestrator = Orchestrator(config=config, data_adapter=adapter)
+        orchestrator.execution_engine.adapter.fill_probability = 1.0
+
+        orchestrator.run_iteration(timestamp=bars[-1].timestamp, symbols=["TEST"])
+
+        self.assertIsNone(orchestrator.portfolio_state)
+        self.assertEqual(orchestrator.positions, {})
+
+    def test_run_iteration_risk_rejects_trade(self):
+        bars = generate_trending_bars()
+        adapter = FakeDataAdapter(bars)
+        config = Config()
+        config.data.symbols = ["TEST"]
+        config.features.enabled_indicators = ["SMA_20", "SMA_50", "RSI", "MACD", "ATR", "BOLLINGER"]
+        config.alpha.enabled_models = ["breakout"]
+
+        orchestrator = Orchestrator(config=config, data_adapter=adapter)
+        orchestrator.execution_engine.adapter.fill_probability = 1.0
+
+        class RejectRiskEngine:
+            def assess_trade(self, *args, **kwargs):
+                return RiskAssessment(RiskAction.REJECT, 0, "rejected for test")
+
+        orchestrator.risk_engine = RejectRiskEngine()
+
+        orchestrator.run_iteration(timestamp=bars[-1].timestamp, symbols=["TEST"])
+
+        self.assertEqual(orchestrator.positions, {})
+        self.assertIsNotNone(orchestrator.portfolio_state)
+
+    def test_run_iteration_trades_subset_of_symbols(self):
+        bars = generate_trending_bars(symbol="TEST") + generate_trending_bars(symbol="SKIP")
+        adapter = FakeDataAdapter(bars)
+        config = Config()
+        config.data.symbols = ["TEST", "SKIP"]
+        config.alpha.enabled_models = ["breakout"]
+
+        orchestrator = Orchestrator(config=config, data_adapter=adapter)
+        orchestrator.execution_engine.adapter.fill_probability = 1.0
+
+        def fake_generate_all_signals(market_state, features, regime_state):
+            return [
+                Signal(
+                    symbol=market_state.symbol,
+                    direction=SignalDirection.LONG,
+                    strength=0.9,
+                    timestamp=market_state.timestamp,
+                    alpha_name="test",
+                )
+            ]
+
+        def fake_process(signals):
+            scored = []
+            for signal in signals:
+                scored.append(
+                    ScoredSignal(
+                        symbol=signal.symbol,
+                        direction=signal.direction,
+                        confidence=0.9,
+                        edge=0.1,
+                        timestamp=signal.timestamp,
+                        alpha_names=[signal.alpha_name],
+                        raw_signals=[signal],
+                    )
+                )
+            return scored
+
+        class SymbolSelectiveRiskEngine:
+            def assess_trade(self, signal, *args, **kwargs):
+                action = RiskAction.ACCEPT if signal.symbol == "TEST" else RiskAction.REJECT
+                quantity = 10 if action is RiskAction.ACCEPT else 0
+                return RiskAssessment(action, quantity, "test decision")
+
+        orchestrator.alpha_engine.generate_all_signals = fake_generate_all_signals
+        orchestrator.signal_processor.process = fake_process
+        orchestrator.risk_engine = SymbolSelectiveRiskEngine()
+
+        orchestrator.run_iteration(timestamp=bars[-1].timestamp, symbols=["TEST", "SKIP"])
+
+        self.assertIn("TEST", orchestrator.positions)
+        self.assertNotIn("SKIP", orchestrator.positions)
 
 
 if __name__ == "__main__":

@@ -230,59 +230,9 @@ class Orchestrator:
             # Step 5: Apply risk management
             self.logger.log_info("Step 5: Applying risk management...")
 
-            if self.portfolio_state is None:
-                starting_cash = 100000.0
-                self.portfolio_state = PortfolioState(
-                    timestamp=timestamp,
-                    cash=starting_cash,
-                    equity=starting_cash,
-                    total_value=starting_cash,
-                    positions=self.positions,
-                )
-
-            approved_orders = []
-
-            for signal in scored_signals:
-                if signal.symbol not in market_states:
-                    continue
-
-                current_price = market_states[signal.symbol].current_price
-                atr = feature_data[signal.symbol].atr if signal.symbol in feature_data else 0.0
-
-                if atr <= 0:
-                    volatility = market_states[signal.symbol].volatility
-                    atr = (volatility * current_price) / (252 ** 0.5) if volatility > 0 else 0.0
-
-                if atr <= 0:
-                    self.logger.log_warning(
-                        f"Skipping {signal.symbol}: unable to compute ATR/volatility for sizing"
-                    )
-                    continue
-
-                assessment = self.risk_engine.assess_trade(
-                    signal,
-                    current_price,
-                    atr,
-                    self.portfolio_state,
-                    list(self.positions.values())
-                )
-
-                if assessment.action.value == "ACCEPT":
-                    self.logger.log_info(f"Trade approved: {signal.symbol} {assessment.reasoning}")
-                    
-                    # Create order
-                    from utils.types import Order, OrderType
-                    order = Order(
-                        symbol=signal.symbol,
-                        quantity=assessment.approved_quantity,
-                        order_type=OrderType.MARKET,
-                        direction=signal.direction,
-                        limit_price=current_price,
-                        timestamp=timestamp,
-                    )
-                    approved_orders.append(order)
-                else:
-                    self.logger.log_info(f"Trade rejected: {signal.symbol} {assessment.reasoning}")
+            approved_orders = self._build_orders_from_signals(
+                scored_signals, feature_data, market_states, timestamp
+            )
             
             # Step 6: Portfolio construction (optional rebalancing)
             self.logger.log_info("Step 6: Constructing portfolio...")
@@ -308,6 +258,64 @@ class Orchestrator:
             traceback.print_exc()
             self.stop()
 
+    def _build_orders_from_signals(self, scored_signals, feature_data, market_states, timestamp):
+        """Apply risk checks and translate scored signals into executable orders."""
+        if self.portfolio_state is None:
+            starting_cash = self.config.risk.starting_cash
+            self.portfolio_state = PortfolioState(
+                timestamp=timestamp,
+                cash=starting_cash,
+                equity=starting_cash,
+                total_value=starting_cash,
+                positions=self.positions,
+            )
+
+        approved_orders = []
+
+        for signal in scored_signals:
+            if signal.symbol not in market_states:
+                continue
+
+            current_price = market_states[signal.symbol].current_price
+            atr = feature_data[signal.symbol].atr if signal.symbol in feature_data else 0.0
+
+            if atr <= 0:
+                volatility = getattr(market_states[signal.symbol], "volatility", 0.0)
+                volatility = volatility or 0.0
+                atr = (volatility * current_price) / (252 ** 0.5) if volatility > 0 else 0.0
+
+            if atr <= 0:
+                self.logger.log_warning(
+                    f"Skipping {signal.symbol}: unable to compute ATR/volatility for sizing"
+                )
+                continue
+
+            assessment = self.risk_engine.assess_trade(
+                signal,
+                current_price,
+                atr,
+                self.portfolio_state,
+                list(self.positions.values())
+            )
+
+            if assessment.action.value == "ACCEPT":
+                self.logger.log_info(f"Trade approved: {signal.symbol} {assessment.reasoning}")
+
+                from utils.types import Order, OrderType
+                order = Order(
+                    symbol=signal.symbol,
+                    quantity=assessment.approved_quantity,
+                    order_type=OrderType.MARKET,
+                    direction=signal.direction,
+                    limit_price=current_price,
+                    timestamp=timestamp,
+                )
+                approved_orders.append(order)
+            else:
+                self.logger.log_info(f"Trade rejected: {signal.symbol} {assessment.reasoning}")
+
+        return approved_orders
+
     def _update_portfolio_with_fills(self, filled_orders, market_states, timestamp):
         """Update cash, positions, and portfolio value based on filled orders."""
         for order in filled_orders:
@@ -323,14 +331,21 @@ class Orchestrator:
             market_price = market_states.get(order.symbol).current_price if order.symbol in market_states else order.avg_fill_price
 
             if existing_position:
-                new_quantity = existing_position.quantity + quantity
+                existing_qty = existing_position.quantity
+                new_quantity = existing_qty + quantity
+
                 if new_quantity == 0:
                     del self.positions[order.symbol]
-                else:
+                    continue
+
+                same_direction = existing_qty * quantity > 0
+                flips_direction = existing_qty * new_quantity < 0
+
+                if same_direction:
                     weighted_entry = (
-                        existing_position.entry_price * existing_position.quantity +
-                        order.avg_fill_price * quantity
-                    ) / new_quantity
+                        abs(existing_qty) * existing_position.entry_price +
+                        abs(quantity) * order.avg_fill_price
+                    ) / abs(new_quantity)
                     self.positions[order.symbol] = Position(
                         symbol=order.symbol,
                         quantity=new_quantity,
@@ -338,6 +353,23 @@ class Orchestrator:
                         current_price=market_price,
                         timestamp=timestamp,
                     )
+                else:
+                    if flips_direction:
+                        self.positions[order.symbol] = Position(
+                            symbol=order.symbol,
+                            quantity=new_quantity,
+                            entry_price=order.avg_fill_price,
+                            current_price=market_price,
+                            timestamp=timestamp,
+                        )
+                    else:
+                        self.positions[order.symbol] = Position(
+                            symbol=order.symbol,
+                            quantity=new_quantity,
+                            entry_price=existing_position.entry_price,
+                            current_price=market_price,
+                            timestamp=timestamp,
+                        )
             else:
                 self.positions[order.symbol] = Position(
                     symbol=order.symbol,
