@@ -328,7 +328,8 @@ class Orchestrator:
                 self.portfolio_state.cash += fill_value
 
             existing_position = self.positions.get(order.symbol)
-            market_price = market_states.get(order.symbol).current_price if order.symbol in market_states else order.avg_fill_price
+            market_state = market_states.get(order.symbol)
+            market_price = market_state.current_price if market_state else order.avg_fill_price
 
             if existing_position:
                 existing_qty = existing_position.quantity
@@ -385,7 +386,8 @@ class Orchestrator:
         """Recompute equity and total value from current positions and cash."""
         equity_value = self.portfolio_state.cash
         for symbol, position in self.positions.items():
-            market_price = market_states.get(symbol).current_price if symbol in market_states else position.current_price
+            market_state = market_states.get(symbol)
+            market_price = market_state.current_price if market_state else position.current_price
             position.current_price = market_price
             position._update_pnl()
             equity_value += position.quantity * market_price
