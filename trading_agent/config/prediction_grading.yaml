@@ -1,0 +1,62 @@
+# Prediction Engine Grading Configuration
+# Thresholds for evaluating ML model quality out-of-sample
+
+grades:
+  A:
+    roc_auc_min: 0.60
+    brier_max: 0.19
+    accuracy_min: 0.52
+    bucket_monotonicity: true
+    cross_fold_stability_min: 0.85  # Min correlation of metrics across folds
+    regime_consistency_min: 0.80    # Min hit-rate in worst regime / best regime
+  
+  B:
+    roc_auc_min: 0.55
+    roc_auc_max: 0.60
+    brier_max: 0.21
+    accuracy_min: 0.51
+    bucket_monotonicity: false
+    cross_fold_stability_min: 0.75
+    regime_consistency_min: 0.70
+  
+  C:
+    roc_auc_min: 0.52
+    roc_auc_max: 0.55
+    brier_max: 0.24
+    accuracy_min: 0.50
+    cross_fold_stability_min: 0.60
+    regime_consistency_min: 0.50
+  
+  D:
+    # Anything below C thresholds, but still detectable above random
+
+# Probability bucket configuration
+probability_buckets:
+  edges: [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 1.00]
+  # Buckets: [0.50-0.55), [0.55-0.60), ..., [0.90-1.00]
+
+# Regime stability analysis
+regime_analysis:
+  enabled: true
+  min_samples_per_regime: 30  # Minimum samples to compute metrics for a regime
+  consistency_metric: "hit_rate"  # "hit_rate" or "roc_auc"
+
+# Walk-forward fold configuration
+walk_forward:
+  train_years: 2
+  test_years: 1
+  step_years: 1
+  min_test_samples: 50
+
+# Return aggregation horizons
+horizons:
+  - 5     # 5-bar return
+  - 20    # 20-bar return
+  - 60    # 60-bar return (quarterly)
+
+# Reporting
+reporting:
+  output_format: "both"  # "json", "html", or "both"
+  plots_dir: "reports/prediction_grading"
+  include_regime_plots: true
+  include_bucket_plots: true

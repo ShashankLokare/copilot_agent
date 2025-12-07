@@ -1,0 +1,87 @@
+# Strategy Grading Configuration
+# Thresholds for evaluating full trading strategy performance (P&L, Sharpe, etc.)
+
+grades:
+  A:
+    annual_return_min: 0.15        # 15% annual return minimum
+    sharpe_ratio_min: 1.5          # Sharpe ratio ≥ 1.5
+    max_drawdown_max: -0.25        # Max drawdown ≤ -25%
+    win_rate_min: 0.52             # Win rate ≥ 52%
+    profit_factor_min: 1.5         # (Gross profit) / (Gross loss) ≥ 1.5
+    calmar_ratio_min: 0.6          # Return / Max Drawdown ≥ 0.6
+    regime_consistency_min: 0.75   # Min Sharpe in worst regime / best regime
+    cross_fold_stability_min: 0.80 # Correlation of metrics across folds
+    transactions_per_year_max: 500 # Control for overtrading
+  
+  B:
+    annual_return_min: 0.10
+    sharpe_ratio_min: 1.0
+    max_drawdown_max: -0.35
+    win_rate_min: 0.51
+    profit_factor_min: 1.2
+    calmar_ratio_min: 0.3
+    regime_consistency_min: 0.60
+    cross_fold_stability_min: 0.70
+    transactions_per_year_max: 800
+  
+  C:
+    annual_return_min: 0.05
+    sharpe_ratio_min: 0.5
+    max_drawdown_max: -0.50
+    win_rate_min: 0.50
+    profit_factor_min: 1.0
+    calmar_ratio_min: 0.0
+    regime_consistency_min: 0.40
+    cross_fold_stability_min: 0.50
+    transactions_per_year_max: 2000
+  
+  D:
+    # Positive returns but with poor risk-adjusted metrics
+
+# Cost assumptions for evaluating strategy
+costs:
+  slippage_bps: 2.0           # Basis points per trade
+  commission_bps: 1.0         # Basis points per trade
+  bid_ask_spread_bps: 1.0     # Basis points round-trip
+
+# Portfolio constraints
+portfolio:
+  max_position_size: 0.10     # Max 10% per symbol
+  leverage: 1.0               # 1x leverage
+  target_turnover: 0.5        # Annual turnover target
+
+# Walk-forward backtest config
+walk_forward:
+  train_years: 2
+  test_years: 1
+  step_years: 1
+  optimization: "walk_forward"  # vs "anchored", "expanding"
+
+# Monte Carlo simulation config
+monte_carlo:
+  n_simulations: 1000
+  return_sampling: "block"  # "block", "random", or "distribution"
+  block_size: 20  # For block bootstrap
+  confidence_level: 0.95
+
+# Regime-based analysis
+regime_analysis:
+  enabled: true
+  consistency_metric: "sharpe_ratio"
+  min_samples_per_regime: 100
+
+# Reporting
+reporting:
+  output_format: "both"  # "json", "html", or "both"
+  plots_dir: "reports/strategy_grading"
+  include_regime_plots: true
+  include_drawdown_plots: true
+  include_monthly_returns: true
+  include_mc_plots: true
+
+# Decision gates for live deployment
+deployment_gates:
+  prediction_grade_min: "B"        # Min grade to deploy ML predictions
+  strategy_grade_min: "B"          # Min grade to deploy full strategy
+  live_mode: "paper"               # "paper" if grade B, "live" if grade A
+  requires_manual_approval: true   # Manual sign-off before deployment
