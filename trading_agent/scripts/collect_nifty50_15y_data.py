@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
 """
-Collect 15 years of NIFTY50 historical data for ML prediction model training.
+Collect NIFTY50 historical data for ML prediction model training.
 
-This script downloads OHLCV data for all NIFTY50 stocks from 2010-2025,
-suitable for walk-forward training and backtesting the prediction engine.
+This script downloads OHLCV data for NIFTY50 stocks over a configurable date
+range (default 2010-2025), suitable for walk-forward training and backtesting.
 
 Data sources:
 1. yfinance - Primary source for NIFTY50 stocks
-2. NSEpy - Alternative for NSE-specific data
+2. NSEpy   - Alternative for NSE-specific data
 3. Fallback - Synthetic data if real data unavailable
 
 Output:
-- data/nifty50_15y_ohlcv.csv - Complete 15-year dataset
-- logs/data_collection.log - Collection details
+- data/nifty50_15y_ohlcv.csv - Collected dataset (real + synthetic fallback)
+- logs/data_collection.log   - Collection details
 """
 
-import pandas as pd
-import numpy as np
 import logging
-from datetime import datetime, timedelta
-from pathlib import Path
 import sys
 import time
-from typing import List, Dict, Optional, Tuple
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -39,35 +40,34 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# NIFTY50 stocks (as of 2024)
+class NetworkUnavailable(Exception):
+    """Raised when remote data sources cannot be reached."""
+
+
+def _looks_like_network_error(exc: Exception) -> bool:
+    """Heuristic to detect DNS/connection failures and avoid hammering endpoints."""
+    msg = str(exc).lower()
+    network_terms = [
+        "could not resolve host",
+        "failed to perform, curl",
+        "temporary failure in name resolution",
+        "name or service not known",
+    ]
+    return any(term in msg for term in network_terms)
+
+
+# NIFTY50 stocks (current set, 50 unique tickers; keep in sync as the index changes)
 NIFTY50_SYMBOLS = [
-    # Financial Services
-    "TCS", "INFY", "RELIANCE", "HDFC", "ICICIBANK",
-    "KOTAKBANK", "AXISBANK", "LT", "BAJAJFINSV", "BAJAJAUTOL",
-    
-    # Energy & Utilities
-    "NTPC", "POWERGRID", "BHARTIARTL", "JSWSTEEL", "MARUTI",
-    
-    # Technology
-    "WIPRO", "HCLTECH", "TECHM", "MFSL", "SUNPHARMA",
-    
-    # Consumer & Retail
-    "HINDUNILVR", "ITC", "NESTLEIND", "INDIGO", "MARUTISUZU",
-    
-    # Infrastructure & Industrial
-    "SBICARD", "ADANIPORTS", "ADANIGREEN", "ADANITRANS", "ADANIPOWER",
-    
-    # Healthcare & Pharma
-    "CIPLA", "DRREDDY", "DIVISLAB", "PHARMAIND", "COLPAL",
-    
-    # FMCG & Consumer
-    "BRITANNIA", "PIDILITIND", "BAJAJFINSV", "GODREJCP", "HEROMOTOCO",
-    
-    # Metals & Mining
-    "TATASTEEL", "HINDALCO", "SAIL", "VEDL", "NMDC",
-    
-    # Others
-    "ULTRACEMCO", "SHREECEM", "ACC", "BOSCHLTD"
+    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "AXISBANK",
+    "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BHARTIARTL", "BPCL",
+    "BRITANNIA", "CIPLA", "COALINDIA", "DIVISLAB", "DRREDDY",
+    "EICHERMOT", "GRASIM", "HCLTECH", "HDFCBANK", "HINDALCO",
+    "HINDUNILVR", "ICICIBANK", "INDUSINDBK", "INFY", "ITC",
+    "JSWSTEEL", "KOTAKBANK", "LT", "LTIM", "M&M",
+    "MARUTI", "NESTLEIND", "NTPC", "ONGC", "POWERGRID",
+    "RELIANCE", "SBILIFE", "SBIN", "SHREECEM", "SUNPHARMA",
+    "TATACONSUM", "TATAMOTORS", "TATASTEEL", "TCS", "TECHM",
+    "TITAN", "ULTRACEMCO", "UPL", "WIPRO", "HEROMOTOCO"
 ]
 
 # Remove duplicates and get unique 50 stocks
@@ -124,6 +124,8 @@ def collect_data_yfinance(
     all_data = []
     failed_symbols = []
     
+    network_error = False
+
     for i, symbol in enumerate(symbols, 1):
         symbol_nse = f"{symbol}.NS"  # Yahoo Finance uses .NS for NSE stocks
         
@@ -133,12 +135,13 @@ def collect_data_yfinance(
             # Download with retries
             for attempt in range(max_retries):
                 try:
+                    # Newer yfinance versions removed the verbose argument; keep call minimal for compatibility
                     df = yf.download(
                         symbol_nse,
                         start=start_date,
                         end=end_date,
                         progress=False,
-                        verbose=False
+                        auto_adjust=False,  # keep standard OHLCV columns to avoid schema surprises
                     )
                     
                     if df.empty:
@@ -146,10 +149,40 @@ def collect_data_yfinance(
                         failed_symbols.append(symbol)
                         break
                     
-                    # Prepare data
+                    # Prepare data (handle yfinance auto_adjust=True default that returns 6 columns)
                     df = df.reset_index()
-                    df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'adj_close', 'volume']
-                    df['symbol'] = symbol
+                    # Flatten possible MultiIndex columns from yfinance
+                    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+
+                    rename_map = {
+                        "Date": "timestamp",
+                        "Datetime": "timestamp",
+                        "Open": "open",
+                        "High": "high",
+                        "Low": "low",
+                        "Close": "close",
+                        "Adj Close": "adj_close",
+                        "Adj_Close": "adj_close",
+                        "Volume": "volume",
+                    }
+                    df = df.rename(columns=rename_map)
+                    df.columns = [col.lower().replace(" ", "_") for col in df.columns]
+                    
+                    required_cols = {"timestamp", "open", "high", "low", "close", "volume"}
+                    if not required_cols.issubset(df.columns):
+                        logger.warning(
+                            "  Missing expected columns for %s (got %s). Skipping.",
+                            symbol,
+                            list(df.columns),
+                        )
+                        failed_symbols.append(symbol)
+                        break
+                    
+                    # If adj_close missing (auto_adjust=True), backfill from close for consistency
+                    if "adj_close" not in df.columns:
+                        df["adj_close"] = df["close"]
+                    
+                    df["symbol"] = symbol
                     
                     # Reorder columns
                     df = df[['symbol', 'timestamp', 'open', 'high', 'low', 'close', 'volume']]
@@ -165,6 +198,14 @@ def collect_data_yfinance(
                     break
                     
                 except Exception as e:
+                    if _looks_like_network_error(e):
+                        network_error = True
+                        logger.error(
+                            "  ✗ Network unavailable while fetching data (%s). "
+                            "Aborting remote downloads and falling back.",
+                            str(e)[:80],
+                        )
+                        break
                     if attempt < max_retries - 1:
                         logger.warning(f"  Attempt {attempt+1} failed: {str(e)[:50]}... Retrying...")
                         time.sleep(1)  # Wait before retry
@@ -176,9 +217,16 @@ def collect_data_yfinance(
             logger.error(f"  ✗ {symbol}: {str(e)}")
             failed_symbols.append(symbol)
         
+        if network_error:
+            break
+
         # Rate limiting
         time.sleep(0.5)
     
+    if network_error:
+        # If network is down, signal to caller by raising so it can short-circuit.
+        raise NetworkUnavailable("Network unavailable for yfinance download")
+
     if all_data:
         combined_df = pd.concat(all_data, ignore_index=True)
         combined_df = combined_df.sort_values(['symbol', 'timestamp']).reset_index(drop=True)
@@ -359,7 +407,7 @@ def collect_nifty50_data(
     use_synthetic_fallback: bool = True
 ) -> Tuple[pd.DataFrame, Dict]:
     """
-    Main function to collect 15 years of NIFTY50 data.
+    Main function to collect NIFTY50 data for a configurable date range.
     
     Args:
         output_path: Where to save the CSV
@@ -373,9 +421,10 @@ def collect_nifty50_data(
     # Date range
     start_date = datetime(start_year, 1, 1)
     end_date = datetime(end_year, 1, 1)
+    years_span = (end_date - start_date).days / 365.25
     
     logger.info("=" * 70)
-    logger.info("NIFTY50 15-Year Data Collection")
+    logger.info(f"NIFTY50 Data Collection (~{years_span:.1f} years)")
     logger.info("=" * 70)
     logger.info(f"Date Range: {start_date.date()} to {end_date.date()}")
     logger.info(f"Symbols: {len(NIFTY50_SYMBOLS)}")
@@ -384,9 +433,15 @@ def collect_nifty50_data(
     
     # Try yfinance first
     logger.info("\n--- Attempting yfinance (recommended) ---")
-    df, failed = collect_data_yfinance(NIFTY50_SYMBOLS, start_date, end_date)
+    try:
+        df, failed = collect_data_yfinance(NIFTY50_SYMBOLS, start_date, end_date)
+        yfinance_available = True
+    except NetworkUnavailable as e:
+        logger.warning(f"\n--- Network unavailable for yfinance: {e}. Skipping remote downloads ---")
+        df, failed = pd.DataFrame(), NIFTY50_SYMBOLS
+        yfinance_available = False
     
-    if df.empty and try_import_nsepy() is not None:
+    if df.empty and yfinance_available and try_import_nsepy() is not None:
         # Try nsepy as fallback
         logger.info("\n--- yfinance failed, trying nsepy ---")
         df, failed = collect_data_nsepy(NIFTY50_SYMBOLS, start_date, end_date)

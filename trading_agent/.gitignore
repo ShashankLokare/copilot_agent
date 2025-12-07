@@ -1,0 +1,30 @@
+# OS cruft
+.DS_Store
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual envs
+.venv/
+venv/
+
+# Data artifacts
+data/*.csv
+data/*.parquet
+data/archive_nifty-50_Stocks/
+data/feature_columns.txt
+data/prediction_engine_report.csv
+
+# Model artifacts and logs
+models/
+logs/
+
+# Build/dist
+*.egg-info/
+build/
+dist/
+
+# IDE
+.vscode/
+.idea/
