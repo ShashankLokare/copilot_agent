@@ -64,6 +64,7 @@ class SimulatedExecutor(ExecutionAdapter):
         slippage_bps: float = 2.0,
         spread_bps: float = 1.0,
         fill_probability: float = 0.95,
+        deterministic: bool = False,
     ):
         """
         Initialize simulated executor.
@@ -72,10 +73,12 @@ class SimulatedExecutor(ExecutionAdapter):
             slippage_bps: Slippage in basis points
             spread_bps: Bid-ask spread in basis points
             fill_probability: Probability of order fill (0-1)
+            deterministic: If True, force fills and disable randomness (useful for reproducible backtests)
         """
         self.slippage_bps = slippage_bps / 10000.0
         self.spread_bps = spread_bps / 10000.0
-        self.fill_probability = fill_probability
+        self.fill_probability = 1.0 if deterministic else fill_probability
+        self.deterministic = deterministic
         
         self.orders: Dict[str, Order] = {}
         self.filled_orders: List[Order] = []
@@ -122,7 +125,7 @@ class SimulatedExecutor(ExecutionAdapter):
         order = self.orders[order_id]
         
         # Determine if order fills
-        if random.random() > self.fill_probability:
+        if not self.deterministic and random.random() > self.fill_probability:
             order.status = OrderStatus.REJECTED
             return
         

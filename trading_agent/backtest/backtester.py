@@ -60,7 +60,7 @@ class Backtester:
         self.risk_engine = RiskEngine()
         self.portfolio_builder = PortfolioBuilder()
         
-        executor = SimulatedExecutor(slippage_bps=slippage_bps, spread_bps=spread_bps)
+        executor = SimulatedExecutor(slippage_bps=slippage_bps, spread_bps=spread_bps, deterministic=True)
         self.execution_engine = ExecutionEngine(executor)
         
         self.tracker = PerformanceTracker()
