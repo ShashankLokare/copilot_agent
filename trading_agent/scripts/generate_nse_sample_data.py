@@ -34,7 +34,7 @@ def generate_nse_sample_data(
     if end_date is None:
         end_date = datetime(2023, 12, 31)
     if symbols is None:
-        symbols = ["TCS", "INFY", "RELIANCE", "HDFC", "BAJAJ-AUTO"]
+        symbols = ["TCS", "INFY", "RELIANCE", "HDFCBANK", "BAJAJ-AUTO"]
     
     # Generate date range (excluding weekends and holidays)
     all_dates = pd.date_range(start=start_date, end=end_date, freq='B')  # 'B' = business days
@@ -47,7 +47,7 @@ def generate_nse_sample_data(
         "TCS": 3500,
         "INFY": 1800,
         "RELIANCE": 2600,
-        "HDFC": 2400,
+        "HDFCBANK": 2400,
         "BAJAJ-AUTO": 6200,
     }
     

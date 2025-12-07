@@ -76,7 +76,7 @@ def main():
     print("        • Sample Data: 260 trading days (2023-01-02 to 2023-12-29)")
     print()
     print_item("🇮🇳", "Indian Market (NSE NIFTY50)")
-    print("        • Symbols: TCS, INFY, RELIANCE, HDFC, BAJAJ-AUTO")
+    print("        • Symbols: TCS, INFY, RELIANCE, HDFCBANK, BAJAJ-AUTO")
     print("        • Execution: 3 bps slippage, 2 bps spread")
     print("        • Risk: 3% daily DD limit, 5 positions max")
     print("        • Sample Data: 260 trading days (2023-01-02 to 2023-12-29)")

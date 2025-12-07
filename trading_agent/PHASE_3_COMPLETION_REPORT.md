@@ -23,7 +23,7 @@ Successfully adapted the multi-agent algorithmic trading system to support both 
   - Risk: 5% daily drawdown, 10% kill-switch
   
 - **NSE Config**: `config/nse_config.yaml`
-  - Symbols: TCS, INFY, RELIANCE, HDFC, BAJAJ-AUTO
+  - Symbols: TCS, INFY, RELIANCE, HDFCBANK, BAJAJ-AUTO
   - Execution: 3 bps slippage, 2 bps spread
   - Risk: 3% daily drawdown, 10% kill-switch
 
@@ -77,7 +77,7 @@ Before:
 After:
   Market Selection ↓
   ├→ USA Config → AAPL, GOOGL, MSFT, AMZN, NVDA
-  ├→ NSE Config → TCS, INFY, RELIANCE, HDFC, BAJAJ-AUTO
+  ├→ NSE Config → TCS, INFY, RELIANCE, HDFCBANK, BAJAJ-AUTO
   └→ All entry points + data adapters support both
 ```
 
@@ -231,7 +231,7 @@ Please select your trading market:
      - Slippage: ~1 bps
 
   2) Indian Stock Market (NSE NIFTY50)
-     - Symbols: TCS, INFY, RELIANCE, HDFC, BAJAJ-AUTO
+     - Symbols: TCS, INFY, RELIANCE, HDFCBANK, BAJAJ-AUTO
      - Trading Hours: 9:15 AM - 3:30 PM IST
      - Slippage: ~3 bps
 

@@ -64,7 +64,7 @@ This document provides a comprehensive index of all Phase 3 NSE market adaptatio
 
 - **`config/nse_config.yaml`** (1.3 KB)
   - NSE market parameters
-  - 5 NIFTY50 stocks (TCS, INFY, RELIANCE, HDFC, BAJAJ-AUTO)
+  - 5 NIFTY50 stocks (TCS, INFY, RELIANCE, HDFCBANK, BAJAJ-AUTO)
   - Execution: 3 bps slippage, 2 bps spread
   - Risk: 3% daily DD, 5 positions
 
@@ -267,7 +267,7 @@ python COMPLETION_SUMMARY.py
 - TCS - Tata Consultancy Services
 - INFY - Infosys Limited
 - RELIANCE - Reliance Industries
-- HDFC - HDFC Bank Limited
+- HDFCBANK - HDFCBANK Limited
 - BAJAJ-AUTO - Bajaj Auto Limited
 
 ---

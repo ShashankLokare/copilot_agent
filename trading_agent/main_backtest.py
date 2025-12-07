@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Main entry point for backtesting with market selection.
-Supports both USA and Indian NSE markets.
+Main entry point for backtesting (default: NSE, non-interactive).
 """
 
 import sys
@@ -13,14 +12,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 from config.config import Config
 from data.adapters import CSVAdapter
 from backtest.backtester import Backtester
-from utils.market_selector import select_market, get_market_config_path
+from utils.market_selector import get_market_config_path, Market
 from datetime import datetime
 
 
 def main():
-    """Run backtest with market selection."""
-    # Select market
-    market = select_market()
+    """Run backtest for NSE without interactive selection."""
+    market = Market.NSE
     config_path = get_market_config_path(market)
     
     print(f"\n=== Algorithmic Trading System - BACKTEST MODE ({market.value.upper()}) ===\n")

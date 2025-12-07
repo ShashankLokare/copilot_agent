@@ -42,7 +42,7 @@ config_path = get_market_config_path(market)  # Returns path to market config
   - Max Position Size: 10%
 
 #### NSE Market (`config/nse_config.yaml`)
-- **Symbols**: TCS, INFY, RELIANCE, HDFC, BAJAJ-AUTO (NIFTY50 stocks)
+- **Symbols**: TCS, INFY, RELIANCE, HDFCBANK, BAJAJ-AUTO (NIFTY50 stocks)
 - **Execution**:
   - Slippage: 3.0 basis points (emerging market, less liquid)
   - Spread: 2.0 basis points
@@ -74,7 +74,7 @@ config_path = get_market_config_path(market)  # Returns path to market config
   - TCS: ~3,500 INR
   - INFY: ~1,800 INR
   - RELIANCE: ~2,600 INR
-  - HDFC: ~2,400 INR
+- HDFCBANK: ~2,400 INR
   - BAJAJ-AUTO: ~6,200 INR
 - Realistic NSE volumes: 1-10M shares
 - Result: ✅ Successfully generated
@@ -173,7 +173,7 @@ or
 
 **NSE Market**:
 - 5 symbols × 260 trading days = 1,300 records
-- Price range: TCS ₹3500, INFY ₹1800, RELIANCE ₹2600, HDFC ₹2400, BAJAJ-AUTO ₹6200
+- Price range: TCS ₹3500, INFY ₹1800, RELIANCE ₹2600, HDFCBANK ₹2400, BAJAJ-AUTO ₹6200
 - Volume range: 1M-10M shares per day
 - Daily returns: mean 0.05%, std 1.5% (realistic for NSE)
 
@@ -259,7 +259,7 @@ Please select your trading market:
      - Slippage: ~1 bps
 
   2) Indian Stock Market (NSE NIFTY50)
-     - Symbols: TCS, INFY, RELIANCE, HDFC, BAJAJ-AUTO
+    - Symbols: TCS, INFY, RELIANCE, HDFCBANK, BAJAJ-AUTO
      - Trading Hours: 9:15 AM - 3:30 PM IST
      - Slippage: ~3 bps
 

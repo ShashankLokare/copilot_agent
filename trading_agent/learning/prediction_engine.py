@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import roc_auc_score, log_loss, brier_score_loss, accuracy_score
 
 try:
     import xgboost as xgb
@@ -56,7 +57,7 @@ class PredictionEngine:
     
     def __init__(
         self,
-        config: Dict[str, Any],
+        config: Optional[Dict[str, Any]] = None,
         model_type: str = "xgboost",
         regime_mode: str = "single_model_with_feature",
     ):
@@ -76,7 +77,20 @@ class PredictionEngine:
             model_type: "xgboost" or "lightgbm"
             regime_mode: "single_model_with_feature" or "per_regime_models"
         """
-        self.config = config
+        if config is None:
+            # Lazy import to avoid circular dependency
+            try:
+                if model_type == "xgboost":
+                    from config.ml_model_config import get_xgboost_params
+                    config = get_xgboost_params()
+                else:
+                    from config.ml_model_config import get_lightgbm_params
+                    config = get_lightgbm_params()
+            except Exception:
+                config = {}
+
+        # Use a shallow copy so callers' dictionaries are not mutated
+        self.config: Dict[str, Any] = dict(config)
         self.model_type = model_type
         self.regime_mode = regime_mode
         
@@ -101,6 +115,27 @@ class PredictionEngine:
             f"Initialized PredictionEngine: "
             f"type={model_type}, regime_mode={regime_mode}"
         )
+
+    @classmethod
+    def from_default_config(
+        cls,
+        model_type: str = "xgboost",
+        regime_mode: str = "single_model_with_feature",
+    ) -> "PredictionEngine":
+        """
+        Convenience constructor that pulls hyperparameters from config/ml_model_config.py.
+        """
+        try:
+            if model_type == "xgboost":
+                from config.ml_model_config import get_xgboost_params
+                config = get_xgboost_params()
+            else:
+                from config.ml_model_config import get_lightgbm_params
+                config = get_lightgbm_params()
+        except Exception:
+            config = {}
+
+        return cls(config=config, model_type=model_type, regime_mode=regime_mode)
     
     def fit(
         self,
@@ -312,6 +347,123 @@ class PredictionEngine:
         
         logger.info(f"Generated {len(predictions)} predictions")
         return predictions
+
+    # ------------------------------------------------------------------
+    # Lightweight helpers for binary direction models used by NIFTY50 pipeline
+    # ------------------------------------------------------------------
+    def train_xgboost(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_valid: Optional[np.ndarray] = None,
+        y_valid: Optional[np.ndarray] = None,
+        sample_weight: Optional[np.ndarray] = None,
+        calibrate: bool = True,
+    ):
+        """Train an XGBoost classifier with optional calibration."""
+        self.model_type = "xgboost"
+        return self._train_classifier(
+            X_train,
+            y_train,
+            X_valid,
+            y_valid,
+            sample_weight=sample_weight,
+            calibrate=calibrate,
+        )
+
+    def train_lightgbm(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_valid: Optional[np.ndarray] = None,
+        y_valid: Optional[np.ndarray] = None,
+        sample_weight: Optional[np.ndarray] = None,
+        calibrate: bool = True,
+    ):
+        """Train a LightGBM classifier with optional calibration."""
+        self.model_type = "lightgbm"
+        return self._train_classifier(
+            X_train,
+            y_train,
+            X_valid,
+            y_valid,
+            sample_weight=sample_weight,
+            calibrate=calibrate,
+        )
+
+    def _train_classifier(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_valid: Optional[np.ndarray],
+        y_valid: Optional[np.ndarray],
+        sample_weight: Optional[np.ndarray],
+        calibrate: bool,
+    ):
+        """
+        Shared classifier trainer with early stopping + calibration.
+        Returns a fitted estimator (CalibratedClassifierCV if calibrate=True).
+        """
+        clf = self._build_classifier()
+
+        fit_kwargs: Dict[str, Any] = {}
+        eval_set = None
+
+        if X_valid is not None and y_valid is not None:
+            eval_set = [(X_train, y_train), (X_valid, y_valid)]
+            fit_kwargs["eval_set"] = eval_set
+
+            early_stop = self.config.get("early_stopping_rounds")
+            if early_stop:
+                fit_kwargs["early_stopping_rounds"] = early_stop
+                fit_kwargs["verbose"] = False
+
+        if sample_weight is not None:
+            fit_kwargs["sample_weight"] = sample_weight
+
+        clf.fit(X_train, y_train, **fit_kwargs)
+
+        if calibrate and X_valid is not None and y_valid is not None:
+            # Use prefit mode so calibration learns on held-out data only
+            calibrator = CalibratedClassifierCV(
+                clf,
+                method="isotonic",
+                cv="prefit",
+            )
+            calibrator.fit(X_valid, y_valid)
+            return calibrator
+
+        return clf
+
+    @staticmethod
+    def compute_roc_auc(y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
+        """Safe ROC-AUC computation."""
+        try:
+            return float(roc_auc_score(y_true, y_pred_proba))
+        except Exception:
+            return float("nan")
+
+    @staticmethod
+    def compute_log_loss(y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
+        """Binary log loss with nan safety."""
+        try:
+            return float(log_loss(y_true, y_pred_proba, labels=[0, 1]))
+        except Exception:
+            return float("nan")
+
+    @staticmethod
+    def compute_brier(y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
+        """Brier score for calibration quality."""
+        try:
+            return float(brier_score_loss(y_true, y_pred_proba))
+        except Exception:
+            return float("nan")
+
+    @staticmethod
+    def compute_accuracy(y_true: np.ndarray, y_pred_proba: np.ndarray, threshold: float = 0.5) -> float:
+        """Thresholded accuracy helper."""
+        y_pred = (y_pred_proba >= threshold).astype(int)
+        return float(accuracy_score(y_true, y_pred))
     
     def save(self, path: str) -> None:
         """
@@ -429,9 +581,9 @@ class PredictionEngine:
                 min_child_weight=self.config.get('min_child_weight', 1),
                 reg_alpha=self.config.get('reg_alpha', 0.0),
                 reg_lambda=self.config.get('reg_lambda', 1.0),
-                early_stopping_rounds=10,
                 random_state=42,
                 verbosity=0,
+                eval_metric="logloss",
             )
         elif self.model_type == "lightgbm":
             return lgb.LGBMClassifier(
@@ -461,9 +613,9 @@ class PredictionEngine:
                 min_child_weight=self.config.get('min_child_weight', 1),
                 reg_alpha=self.config.get('reg_alpha', 0.0),
                 reg_lambda=self.config.get('reg_lambda', 1.0),
-                early_stopping_rounds=10,
                 random_state=42,
                 verbosity=0,
+                objective="reg:squarederror",
             )
         elif self.model_type == "lightgbm":
             return lgb.LGBMRegressor(

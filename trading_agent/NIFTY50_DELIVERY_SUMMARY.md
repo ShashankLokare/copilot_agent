@@ -201,7 +201,7 @@ bash install_ml_dependencies.sh
 
 ### NIFTY50 Stocks
 All 50 major Indian stocks including:
-- **Financial Services**: TCS, INFY, RELIANCE, HDFC, ICICIBANK, KOTAKBANK, AXISBANK
+- **Financial Services**: TCS, INFY, RELIANCE, HDFCBANK, ICICIBANK, KOTAKBANK, AXISBANK
 - **Energy**: NTPC, POWERGRID, ADANIPOWER
 - **Technology**: WIPRO, HCLTECH, TECHM
 - **Consumer**: HINDUNILVR, ITC, NESTLEIND, BRITANNIA

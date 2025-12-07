@@ -222,7 +222,7 @@ python scripts/demo_nifty50_workflow.py
 ## 🎯 NIFTY50 Stocks
 
 **Top 10 By Market Cap:**
-TCS, Reliance, HDFC Bank, Infosys, ICICI Bank, Kotak Bank, Axis Bank, LT, Bajaj Finance, SBI Card
+TCS, Reliance, HDFCBANK, Infosys, ICICI Bank, Kotak Bank, Axis Bank, LT, Bajaj Finance, SBI Card
 
 **All 50:** See NIFTY50_ML_TRAINING_SUMMARY.md section "NIFTY50 Stocks Included"
 

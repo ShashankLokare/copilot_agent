@@ -47,7 +47,7 @@ def generate_synthetic_nifty50_data(
     
     # NIFTY50 stocks
     symbols = [
-        "TCS", "INFY", "RELIANCE", "HDFC", "ICICIBANK",
+        "TCS", "INFY", "RELIANCE", "HDFCBANK", "ICICIBANK",
         "KOTAKBANK", "AXISBANK", "LT", "BAJAJFINSV", "BAJAJAUTOL",
         "NTPC", "POWERGRID", "BHARTIARTL", "JSWSTEEL", "MARUTI",
         "WIPRO", "HCLTECH", "TECHM", "MFSL", "SUNPHARMA",
@@ -74,7 +74,7 @@ def generate_synthetic_nifty50_data(
     
     # Starting prices (realistic for NIFTY50)
     starting_prices = {
-        "TCS": 3500, "INFY": 1800, "RELIANCE": 2600, "HDFC": 2400, "ICICIBANK": 450,
+        "TCS": 3500, "INFY": 1800, "RELIANCE": 2600, "HDFCBANK": 2400, "ICICIBANK": 450,
         "KOTAKBANK": 1200, "AXISBANK": 900, "LT": 2000, "BAJAJFINSV": 1400, "BAJAJAUTOL": 6200,
         "NTPC": 250, "POWERGRID": 180, "BHARTIARTL": 850, "JSWSTEEL": 750, "MARUTI": 8500,
     }

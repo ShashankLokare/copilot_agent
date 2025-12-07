@@ -18,11 +18,13 @@ import copy
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score, accuracy_score
 from sklearn.model_selection import train_test_split
 
 try:
@@ -63,12 +65,12 @@ from config.ml_model_config import (
 )
 
 
-def _build_model(model_type: str, imbalance: float, pos_weight_mult: float = 1.0):
+def _build_model(model_type: str, imbalance: float, pos_weight_mult: float = 1.0, params_override: Optional[Dict] = None):
     """Factory for gradient boosting models with imbalance handling."""
     if model_type == "xgboost":
         if xgb is None:
             raise ImportError("XGBoost not installed. Run bash install_ml_dependencies.sh")
-        params = copy.deepcopy(get_xgboost_params())
+        params = copy.deepcopy(params_override or get_xgboost_params())
         params["eval_metric"] = "logloss"
         # Avoid early_stopping_rounds requirement inside the constructor; handle validation externally
         params.pop("early_stopping_rounds", None)
@@ -78,7 +80,7 @@ def _build_model(model_type: str, imbalance: float, pos_weight_mult: float = 1.0
     if model_type == "lightgbm":
         if lgb is None:
             raise ImportError("LightGBM not installed. Run bash install_ml_dependencies.sh")
-        params = copy.deepcopy(get_lightgbm_params())
+        params = copy.deepcopy(params_override or get_lightgbm_params())
         params["n_jobs"] = params.get("n_jobs", 4)
         params["class_weight"] = {0: 1.0, 1: imbalance * pos_weight_mult}
         return lgb.LGBMClassifier(**params), params
@@ -113,6 +115,53 @@ def _load_existing_dataset(path: Path) -> pd.DataFrame:
     df = df[required]
     df = df.sort_values(["symbol", "timestamp"]).reset_index(drop=True)
     return df
+
+
+def _sample_param_sets(model_type: str, trials: int) -> List[Dict]:
+    """Generate a small set of hyperparameter configs."""
+    configs = []
+    if model_type == "xgboost":
+        base = get_xgboost_params()
+        candidates = [
+            {"learning_rate": 0.05, "max_depth": 3, "subsample": 0.7, "colsample_bytree": 0.7},
+            {"learning_rate": 0.1, "max_depth": 4, "subsample": 0.9, "colsample_bytree": 0.9},
+            {"learning_rate": 0.05, "max_depth": 5, "subsample": 0.8, "colsample_bytree": 0.8},
+        ]
+        for cfg in candidates[:trials]:
+            cfg_full = copy.deepcopy(base)
+            cfg_full.update(cfg)
+            configs.append(cfg_full)
+    elif model_type == "lightgbm":
+        base = get_lightgbm_params()
+        candidates = [
+            {"learning_rate": 0.05, "num_leaves": 31, "feature_fraction": 0.7, "bagging_fraction": 0.7},
+            {"learning_rate": 0.1, "num_leaves": 63, "feature_fraction": 0.9, "bagging_fraction": 0.9},
+            {"learning_rate": 0.05, "num_leaves": 63, "feature_fraction": 0.8, "bagging_fraction": 0.8},
+        ]
+        for cfg in candidates[:trials]:
+            cfg_full = copy.deepcopy(base)
+            cfg_full.update(cfg)
+            configs.append(cfg_full)
+    return configs
+
+
+def _compute_regime_metrics(y_true: np.ndarray, y_prob: np.ndarray, regimes: np.ndarray) -> Dict:
+    """Compute simple per-regime classification metrics."""
+    metrics = {}
+    unique = np.unique(regimes[~pd.isna(regimes)])
+    for r in unique:
+        mask = regimes == r
+        if mask.sum() < 10:
+            continue
+        yt = y_true[mask]
+        yp = y_prob[mask]
+        try:
+            auc = roc_auc_score(yt, yp)
+        except Exception:
+            auc = np.nan
+        acc = accuracy_score(yt, (yp > 0.5).astype(int))
+        metrics[int(r)] = {"count": int(mask.sum()), "auc": float(auc), "acc": float(acc)}
+    return metrics
 
 
 def _get_current_nifty50() -> List[str]:
@@ -162,6 +211,13 @@ def run_complete_training_pipeline(
     use_existing_data: bool = True,
     raw_data_path: str = "data/nifty50_15y_ohlcv.csv",
     use_current_nifty50: bool = False,
+    label_horizon: int = 1,
+    cost_bps: float = 0.0,
+    target_signal_rate: Optional[float] = None,
+    hpo_trials: int = 0,
+    min_expected_edge: float = 0.0,
+    allowed_regime_buckets: Optional[List[int]] = None,
+    enable_meta_label: bool = False,
 ) -> Dict:
     """
     Run end-to-end training, calibration, realistic backtest, and Monte Carlo.
@@ -222,14 +278,22 @@ def run_complete_training_pipeline(
             results["stages"]["data_collection"] = {"status": "failed", "error": str(e)}
             return results
     # Optional symbol filter
-    if use_current_nifty50:
-        allow = set(_get_current_nifty50())
-        before = df_raw["symbol"].nunique()
-        df_raw = df_raw[df_raw["symbol"].isin(allow)].copy()
-        after = df_raw["symbol"].nunique()
-        results["stages"]["data_collection"]["symbols_filtered"] = f"{before} -> {after}"
-        logger.info(f"Filtered symbols to current NIFTY50: {after} kept (from {before})")
-        # Persist filtered version for downstream prep
+        if use_current_nifty50:
+            allow = set(_get_current_nifty50())
+            before = df_raw["symbol"].nunique()
+            df_raw = df_raw[df_raw["symbol"].isin(allow)].copy()
+            after = df_raw["symbol"].nunique()
+            results["stages"]["data_collection"]["symbols_filtered"] = f"{before} -> {after}"
+            logger.info(f"Filtered symbols to current NIFTY50: {after} kept (from {before})")
+            # Persist filtered version for downstream prep
+            df_raw.to_csv(data_path, index=False)
+    # Optional regime filter (only if regime_bucket exists)
+    if allowed_regime_buckets and "regime_bucket" in df_raw.columns:
+        before_rows = len(df_raw)
+        df_raw = df_raw[df_raw["regime_bucket"].isin(allowed_regime_buckets)].copy()
+        after_rows = len(df_raw)
+        results["stages"].setdefault("data_collection", {})
+        results["stages"]["data_collection"]["regime_filter"] = f"{before_rows} -> {after_rows} rows"
         df_raw.to_csv(data_path, index=False)
 
     # Stage 2: Prepare Data
@@ -239,6 +303,8 @@ def run_complete_training_pipeline(
         df_training, feature_cols = prepare_nifty50_data(
             raw_data_path=str(data_path),
             output_path="data/nifty50_training_data.csv",
+            label_horizon=label_horizon,
+            cost_bps=cost_bps,
         )
         # Add forward return for strategy evaluation
         # Use per-symbol next-bar close to compute forward return without misaligned shapes
@@ -311,7 +377,32 @@ def run_complete_training_pipeline(
             neg = np.sum(y_train == 0)
             imbalance = (neg / (pos + 1e-6)) if pos > 0 else 1.0
 
-            base_model, model_params = _build_model(model_type, imbalance, pos_weight_mult)
+            # Optional HPO
+            best_params = None
+            best_auc = -1.0
+            if hpo_trials > 0:
+                param_sets = _sample_param_sets(model_type, hpo_trials)
+                # simple time-respecting split for validation
+                split_idx = int(len(X_train) * 0.8)
+                X_sub = X_train.iloc[:split_idx]
+                y_sub = y_train[:split_idx]
+                X_val = X_train.iloc[split_idx:]
+                y_val = y_train[split_idx:]
+                for params_candidate in param_sets:
+                    try:
+                        candidate_model, _ = _build_model(model_type, imbalance, pos_weight_mult, params_candidate)
+                        candidate_model.fit(X_sub, y_sub)
+                        val_proba = candidate_model.predict_proba(X_val)[:, 1]
+                        # compute simple AUC
+                        from sklearn.metrics import roc_auc_score
+                        auc = roc_auc_score(y_val, val_proba)
+                        if auc > best_auc:
+                            best_auc = auc
+                            best_params = params_candidate
+                    except Exception as e:
+                        logger.warning(f"HPO candidate failed: {e}")
+
+            base_model, model_params = _build_model(model_type, imbalance, pos_weight_mult, best_params)
 
             # Calibration split (time-respecting)
             X_subtrain, X_calib, y_subtrain, y_calib = train_test_split(
@@ -324,7 +415,26 @@ def run_complete_training_pipeline(
             calibrated_model = CalibratedClassifierCV(base_model, method="isotonic", cv=3)
             calibrated_model.fit(X_train, y_train)
 
+            meta_model = None
+            if enable_meta_label:
+                try:
+                    calib_proba = calibrated_model.predict_proba(X_train)[:, 1].reshape(-1, 1)
+                    meta_model = LogisticRegression()
+                    meta_model.fit(calib_proba, y_train)
+                except Exception as e:
+                    logger.warning(f"Meta-label training failed: {e}")
+
             pred_proba = calibrated_model.predict_proba(X_test)[:, 1]
+            if enable_meta_label and meta_model is not None:
+                pred_proba = meta_model.predict_proba(pred_proba.reshape(-1, 1))[:, 1]
+            # Dynamic thresholds if target_signal_rate set (default to symmetric)
+            long_thresh = prob_long
+            short_thresh = prob_short
+            if target_signal_rate is not None and target_signal_rate > 0:
+                train_proba = calibrated_model.predict_proba(X_train)[:, 1]
+                q = min(max(target_signal_rate / 2.0, 0.001), 0.25)
+                long_thresh = float(np.quantile(train_proba, 1 - q))
+                short_thresh = float(np.quantile(train_proba, q))
             pred_class = (pred_proba > 0.5).astype(int)
 
             class_metrics = PerformanceAnalyzer.compute_classification_metrics(
@@ -332,11 +442,27 @@ def run_complete_training_pipeline(
                 pred_class,
                 pred_proba,
             )
+            regime_metrics = {}
+            if "regime_bucket" in test_df.columns:
+                regime_metrics = _compute_regime_metrics(
+                    y_test,
+                    pred_proba,
+                    test_df["regime_bucket"].values,
+                )
 
             # Cost-aware strategy returns
             positions = np.zeros_like(pred_proba)
-            positions[pred_proba > prob_long] = 1
-            positions[pred_proba < prob_short] = -1
+            positions[pred_proba > long_thresh] = 1
+            positions[pred_proba < short_thresh] = -1
+            trade_mask = positions != 0
+            # edge filter: expected edge from prob and forward_return_cost_horizon
+            fwd_key = f"forward_return_cost_{label_horizon}"
+            if fwd_key in test_df.columns:
+                expected_edge = pred_proba * test_df[fwd_key].values
+            else:
+                expected_edge = pred_proba * test_df["forward_return"].values
+            edge_mask = expected_edge > min_expected_edge
+            positions = positions * edge_mask
             trade_mask = positions != 0
             strategy_returns = positions * test_df["forward_return"].values - cost_decimal * trade_mask
             all_returns.extend(strategy_returns.tolist())
@@ -358,6 +484,7 @@ def run_complete_training_pipeline(
                     "avg_signal_rate": float(np.mean(trade_mask)),
                     "returns": strategy_returns.tolist(),
                     "trades": trades_df,
+                    "regime_metrics": regime_metrics,
                     "model": calibrated_model,
                     "test_auc": class_metrics.get("roc_auc", 0.0),
                     "test_accuracy": class_metrics.get("accuracy", 0.0),
@@ -515,6 +642,48 @@ def main():
         action="store_true",
         help="Filter dataset to current NIFTY50 constituents",
     )
+    parser.add_argument(
+        "--label-horizon",
+        type=int,
+        default=1,
+        help="Label horizon (bars ahead) used for training",
+    )
+    parser.add_argument(
+        "--cost-bps",
+        type=float,
+        default=0.0,
+        help="Cost in bps to subtract from forward returns when labeling",
+    )
+    parser.add_argument(
+        "--target-signal-rate",
+        type=float,
+        default=None,
+        help="Target signal rate (0-0.5) to derive dynamic prob thresholds; uses train quantiles",
+    )
+    parser.add_argument(
+        "--hpo-trials",
+        type=int,
+        default=0,
+        help="Number of lightweight hyperparameter candidates to try per fold (small integer)",
+    )
+    parser.add_argument(
+        "--min-expected-edge",
+        type=float,
+        default=0.0,
+        help="Minimum expected edge (prob * forward_return_cost_horizon) to keep a trade",
+    )
+    parser.add_argument(
+        "--allow-regime",
+        type=int,
+        nargs="*",
+        default=None,
+        help="List of allowed regime_bucket values (e.g., -3..5) to include",
+    )
+    parser.add_argument(
+        "--enable-meta-label",
+        action="store_true",
+        help="Train a meta-label LogisticRegression on calibrated probs to boost precision",
+    )
 
     args = parser.parse_args()
 
@@ -531,6 +700,13 @@ def main():
         use_existing_data=args.use_existing_data,
         raw_data_path=args.raw_data_path,
         use_current_nifty50=args.use_current_nifty50,
+        label_horizon=args.label_horizon,
+        cost_bps=args.cost_bps,
+        target_signal_rate=args.target_signal_rate,
+        hpo_trials=args.hpo_trials,
+        min_expected_edge=args.min_expected_edge,
+        allowed_regime_buckets=args.allow_regime,
+        enable_meta_label=args.enable_meta_label,
     )
 
     if results.get("status") == "completed":

@@ -31,7 +31,7 @@ python main_live.py
 - **Best For**: Tech stocks, high liquidity trading
 
 ### NSE (India) Market
-- **Stocks**: TCS, INFY, RELIANCE, HDFC, BAJAJ-AUTO
+- **Stocks**: TCS, INFY, RELIANCE, HDFCBANK, BAJAJ-AUTO
 - **Execution Cost**: 3 bps slippage, 2 bps spread
 - **Risk Limit**: 3% daily drawdown
 - **Best For**: Emerging market exposure, NIFTY50 trading
@@ -53,7 +53,7 @@ Please select your trading market:
      - Slippage: ~1 bps
 
   2) Indian Stock Market (NSE NIFTY50)
-     - Symbols: TCS, INFY, RELIANCE, HDFC, BAJAJ-AUTO
+     - Symbols: TCS, INFY, RELIANCE, HDFCBANK, BAJAJ-AUTO
      - Trading Hours: 9:15 AM - 3:30 PM IST
      - Slippage: ~3 bps
 

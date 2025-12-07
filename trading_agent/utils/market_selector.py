@@ -27,7 +27,7 @@ def get_market_symbols(market: Market) -> list:
     if market == Market.USA:
         return ["AAPL", "GOOGL", "MSFT", "AMZN", "NVDA"]
     elif market == Market.NSE:
-        return ["TCS", "INFY", "RELIANCE", "HDFC", "BAJAJ-AUTO"]
+        return ["TCS", "INFY", "RELIANCE", "HDFCBANK", "BAJAJ-AUTO"]
     else:
         raise ValueError(f"Unsupported market: {market}")
 
@@ -55,7 +55,7 @@ def select_market() -> Market:
     print("     - Slippage: ~1 bps\n")
     
     print("  2) Indian Stock Market (NSE NIFTY50)")
-    print("     - Symbols: TCS, INFY, RELIANCE, HDFC, BAJAJ-AUTO")
+    print("     - Symbols: TCS, INFY, RELIANCE, HDFCBANK, BAJAJ-AUTO")
     print("     - Trading Hours: 9:15 AM - 3:30 PM IST")
     print("     - Slippage: ~3 bps\n")
     

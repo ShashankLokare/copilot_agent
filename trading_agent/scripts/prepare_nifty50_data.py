@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Tuple, Dict, List, Optional
 from datetime import datetime, timedelta
 import sys
+import numpy as np
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -43,7 +44,12 @@ class NiftyDataPreparation:
     7. Export for model training
     """
     
-    def __init__(self, raw_data_path: str = "data/nifty50_15y_ohlcv.csv"):
+    def __init__(
+        self,
+        raw_data_path: str = "data/nifty50_15y_ohlcv.csv",
+        label_horizon: int = 1,
+        cost_bps: float = 0.0,
+    ):
         """
         Initialize data preparation.
         
@@ -55,6 +61,8 @@ class NiftyDataPreparation:
         self.symbol_dfs = {}
         self.features_df = None
         self.labels_df = None
+        self.label_horizon = label_horizon
+        self.cost_decimal = cost_bps / 10000.0
         
         logger.info(f"Initializing NIFTY50 data preparation")
         logger.info(f"Data source: {self.raw_data_path}")
@@ -110,10 +118,16 @@ class NiftyDataPreparation:
         df['daily_return'] = close.pct_change()
         df['volatility_20'] = close.pct_change().rolling(20).std()
         df['volatility_60'] = close.pct_change().rolling(60).std()
+        df['volatility_5'] = close.pct_change().rolling(5).std()
+        df['volatility_10'] = close.pct_change().rolling(10).std()
         
         # Momentum
         df['momentum_10'] = (close / close.shift(10)) - 1
         df['momentum_20'] = (close / close.shift(20)) - 1
+        df['return_5'] = (close / close.shift(5)) - 1
+        df['return_10'] = (close / close.shift(10)) - 1
+        df['return_20'] = (close / close.shift(20)) - 1
+        df['return_60'] = (close / close.shift(60)) - 1
         
         # RSI (Relative Strength Index)
         delta = close.diff()
@@ -146,12 +160,27 @@ class NiftyDataPreparation:
         # Volume indicators
         df['volume_sma_20'] = volume.rolling(20).mean()
         df['volume_ratio'] = volume / (df['volume_sma_20'] + 1)
+        df['volume_zscore_20'] = (volume - df['volume_sma_20']) / (df['volume'].rolling(20).std() + 1e-9)
         
         # High-Low Range
         df['hl_range'] = (high - low) / close
         
         # Gap
         df['gap'] = (close - close.shift(1)) / close.shift(1)
+
+        # Price rank and trend slope
+        rolling_window = 252
+        df['price_rank_252'] = close.rolling(rolling_window).rank(pct=True)
+        # Simple trend slope via rolling linear regression on last 20 bars
+        window = 20
+        idx = np.arange(window)
+        def slope(series):
+            if series.isna().any() or len(series) != window:
+                return np.nan
+            coef = np.polyfit(idx, series.values, 1)
+            return coef[0] / (np.mean(series) + 1e-9)
+        df['trend_slope_20'] = close.rolling(window).apply(slope, raw=False)
+        df['trend_slope_50'] = close.rolling(50).apply(lambda s: slope(s.tail(window)), raw=False)
         
         return df
     
@@ -180,18 +209,44 @@ class NiftyDataPreparation:
         # Combine all symbols
         self.features_df = pd.concat(all_features, ignore_index=True)
         self.features_df = self.features_df.sort_values(['symbol', 'timestamp']).reset_index(drop=True)
+
+        # Regime tagging (simple trend/vol buckets per symbol)
+        def assign_regimes(df_sym: pd.DataFrame) -> pd.DataFrame:
+            df_sym = df_sym.copy()
+            # Volatility regime from vol_20 quantiles
+            q_low, q_high = df_sym['volatility_20'].quantile([0.33, 0.66])
+            df_sym['vol_regime'] = np.select(
+                [df_sym['volatility_20'] <= q_low, df_sym['volatility_20'] >= q_high],
+                [0, 2],
+                default=1
+            )
+            # Trend regime from return_20 quantiles
+            tq_low, tq_high = df_sym['return_20'].quantile([0.33, 0.66])
+            df_sym['trend_regime'] = np.select(
+                [df_sym['return_20'] <= tq_low, df_sym['return_20'] >= tq_high],
+                [-1, 1],
+                default=0
+            )
+            df_sym['regime_bucket'] = df_sym['trend_regime'] * 3 + df_sym['vol_regime']
+            return df_sym
+
+        self.features_df = (
+            self.features_df.groupby('symbol', group_keys=False)
+            .apply(assign_regimes)
+            .reset_index(drop=True)
+        )
         
         logger.info(f"Engineered {self.features_df.shape[1] - 7} features")
         logger.info(f"Feature columns: {[col for col in self.features_df.columns if col not in ['symbol', 'timestamp', 'open', 'high', 'low', 'close', 'volume']][:10]}...")
         
         return self.features_df
     
-    def generate_labels(self, horizon: int = 1, label_type: str = "binary") -> pd.DataFrame:
+    def generate_labels(self, horizon: Optional[int] = None, label_type: str = "binary") -> pd.DataFrame:
         """
         Generate prediction labels.
         
         Args:
-            horizon: Bars ahead to predict (default 1 = next day)
+            horizon: Bars ahead to predict (default to self.label_horizon)
             label_type: "binary" (up/down), "regression" (return), "multiclass" (strong up/down/neutral)
         
         Returns:
@@ -200,31 +255,37 @@ class NiftyDataPreparation:
         if self.features_df is None:
             self.engineer_features()
         
-        logger.info(f"Generating {label_type} labels with {horizon}-bar horizon")
+        target_h = horizon or self.label_horizon
+        logger.info(f"Generating {label_type} labels with {target_h}-bar horizon (cost_bps={self.cost_decimal*10000:.2f})")
         
         df = self.features_df.copy()
+
+        horizons = sorted(set([1, 5, 10, target_h]))
+        for h in horizons:
+            fwd = df['close'].shift(-h) / df['close'] - 1
+            df[f'forward_return_{h}'] = fwd
+            df[f'forward_return_cost_{h}'] = fwd - self.cost_decimal
         
         if label_type == "binary":
-            # Binary: 1 if next close > current close, 0 otherwise
-            df['label'] = (df['close'].shift(-horizon) > df['close']).astype(int)
-            df['label_confidence'] = abs(df['close'].shift(-horizon) / df['close'] - 1)
+            df['label'] = (df[f'forward_return_cost_{target_h}'] > 0).astype(int)
+            df['label_confidence'] = abs(df[f'forward_return_cost_{target_h}'])
         
         elif label_type == "regression":
             # Regression: expected return over horizon
-            df['label'] = (df['close'].shift(-horizon) / df['close'] - 1)
+            df['label'] = df[f'forward_return_cost_{target_h}']
             df['label_confidence'] = abs(df['label'])
         
         elif label_type == "multiclass":
-            # Multiclass: strong down (-1), neutral (0), strong up (1)
-            ret = (df['close'].shift(-horizon) / df['close'] - 1)
+            # Multiclass: strong down (0), neutral (1), strong up (2)
+            ret = df[f'forward_return_cost_{target_h}']
             threshold = 0.02  # 2% threshold
             df['label'] = pd.cut(ret, bins=[-np.inf, -threshold, threshold, np.inf], labels=[0, 1, 2])
             df['label'] = df['label'].astype(int)
             df['label_confidence'] = abs(ret)
         
         self.labels_df = df
-        
-        logger.info(f"Generated labels: {self.labels_df['label'].nunique()} unique values")
+        unique = self.labels_df['label'].nunique() if 'label' in self.labels_df else 0
+        logger.info(f"Generated labels: {unique} unique values")
         
         return self.labels_df
     
@@ -236,7 +297,9 @@ class NiftyDataPreparation:
         df = self.labels_df.copy()
         
         # Drop rows with NaN in important columns
-        feature_cols = [col for col in df.columns if col.startswith(('sma_', 'ema_', 'rsi_', 'macd', 'bb_', 'atr_', 'volatility_', 'momentum_', 'label'))]
+        feature_cols = [col for col in df.columns if col.startswith((
+            'sma_', 'ema_', 'rsi_', 'macd', 'bb_', 'atr_', 'volatility_', 'momentum_', 'label', 'return_', 'volume_', 'price_rank', 'trend_slope', 'forward_return_'
+        ))]
         
         initial_rows = len(df)
         df = df.dropna(subset=feature_cols)
@@ -261,8 +324,9 @@ class NiftyDataPreparation:
         
         # Select feature columns
         feature_cols = [col for col in df.columns if col.startswith((
-            'sma_', 'ema_', 'rsi_', 'macd', 'bb_', 'atr_', 'volatility_', 
-            'momentum_', 'gap', 'hl_range', 'volume_', 'daily_return'
+            'sma_', 'ema_', 'rsi_', 'macd', 'bb_', 'atr_', 'volatility_',
+            'momentum_', 'gap', 'hl_range', 'volume_', 'daily_return', 'return_', 'price_rank', 'trend_slope',
+            'regime_', 'trend_regime', 'vol_regime'
         ))]
         
         logger.info(f"Training dataset: {len(df):,} rows × {len(feature_cols)} features")
@@ -363,7 +427,9 @@ class NiftyDataPreparation:
 
 def prepare_nifty50_data(
     raw_data_path: str = "data/nifty50_15y_ohlcv.csv",
-    output_path: str = "data/nifty50_training_data.csv"
+    output_path: str = "data/nifty50_training_data.csv",
+    label_horizon: int = 1,
+    cost_bps: float = 0.0,
 ) -> Tuple[pd.DataFrame, List[str]]:
     """
     Main function: Prepare NIFTY50 data for ML training.
@@ -379,7 +445,7 @@ def prepare_nifty50_data(
     logger.info("NIFTY50 DATA PREPARATION FOR ML TRAINING")
     logger.info("=" * 70)
     
-    prep = NiftyDataPreparation(raw_data_path)
+    prep = NiftyDataPreparation(raw_data_path, label_horizon=label_horizon, cost_bps=cost_bps)
     df, features = prep.save_training_data(output_path)
     
     logger.info("=" * 70)
