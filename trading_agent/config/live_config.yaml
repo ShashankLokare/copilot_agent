@@ -1,0 +1,61 @@
+# Live Trading Configuration
+# WARNING: Only enable after thorough testing!
+# ALWAYS enforce strict risk limits!
+
+orchestrator:
+  operation_mode: "LIVE"
+  run_frequency: "minute"  # Trade every minute (intraday)
+  scheduled_time: "09:30"  # Market open
+
+data:
+  csv_path: "data/live_feeds.csv"
+  symbols:
+    - "SPY"
+    - "QQQ"
+  timeframe: "1m"
+  api_endpoint: "https://api.example.com/v1"
+  api_key: "${BROKER_API_KEY}"
+
+features:
+  enabled_indicators:
+    - "SMA_20"
+    - "RSI"
+    - "ATR"
+    - "MACD"
+
+regime:
+  detector_type: "simple_rules"
+
+alpha:
+  enabled_models:
+    - "momentum"
+    - "breakout"
+
+signals:
+  min_confidence: 0.6
+  min_edge: 0.02
+
+# STRICT RISK LIMITS FOR LIVE TRADING
+risk:
+  max_position_risk_pct: 0.5      # Max 0.5% per trade
+  max_daily_drawdown_pct: 2.0     # Stop at 2% daily loss
+  max_weekly_drawdown_pct: 5.0    # Stop at 5% weekly loss
+  max_concurrent_positions: 3     # Max 3 open positions
+  kill_switch_enabled: true
+  kill_switch_drawdown_pct: 10.0  # Kill-switch at 10% loss
+
+portfolio:
+  diversification_method: "equal_weight"
+  max_single_position_pct: 5.0
+
+execution:
+  execution_mode: "live"  # LIVE execution!
+  slippage_bps: 1.0
+  spread_bps: 0.5
+  order_timeout_seconds: 60
+  max_retries: 3
+
+monitoring:
+  log_level: "DEBUG"
+  log_path: "logs/live/"
+  store_trades: true

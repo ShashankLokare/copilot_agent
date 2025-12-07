@@ -1,0 +1,66 @@
+# USA Market Configuration
+# Backtesting and paper trading configuration for US stocks
+
+orchestrator:
+  operation_mode: "BACKTEST"
+  run_frequency: "daily"
+
+data:
+  csv_path: "data/usa_ohlcv.csv"
+  symbols:
+    - "AAPL"
+    - "GOOGL"
+    - "MSFT"
+    - "AMZN"
+    - "NVDA"
+  timeframe: "1d"
+
+features:
+  enabled_indicators:
+    - "SMA_20"
+    - "SMA_50"
+    - "SMA_200"
+    - "RSI"
+    - "MACD"
+    - "ATR"
+    - "BOLLINGER"
+  lookback_periods:
+    price_lookback: 252
+    vol_lookback: 20
+
+regime:
+  detector_type: "simple_rules"
+  trend_threshold: 0.5
+  volatility_threshold: 1.0
+
+alpha:
+  enabled_models:
+    - "momentum"
+    - "mean_reversion"
+    - "breakout"
+
+signals:
+  min_confidence: 0.5
+  min_edge: 0.001
+
+risk:
+  max_position_risk_pct: 1.0
+  max_daily_drawdown_pct: 5.0
+  max_weekly_drawdown_pct: 10.0
+  max_concurrent_positions: 10
+  kill_switch_enabled: true
+  kill_switch_drawdown_pct: 20.0
+
+portfolio:
+  method: "equal_weight"
+  rebalance_frequency: "weekly"
+  max_position_size_pct: 10.0
+
+execution:
+  slippage_bps: 1.0
+  spread_bps: 1.0
+  default_order_type: "MARKET"
+
+monitoring:
+  log_path: "logs/usa_trading.log"
+  metrics_frequency: "daily"
